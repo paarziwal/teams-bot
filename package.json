@@ -16,9 +16,14 @@
         "url": "https://github.com"
     },
     "dependencies": {
+        "@bull-board/api": "^6.9.6",
+        "@bull-board/express": "^6.9.6",
         "botbuilder": "~4.23.0",
+        "bullmq": "^5.52.1",
         "dotenv": "^8.2.0",
+        "mock-res": "^0.6.0",
         "mysql2": "^3.14.0",
+        "node-mocks-http": "^1.17.2",
         "restify": "~10.0.0",
         "sequelize": "^6.37.7"
     },

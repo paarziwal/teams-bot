@@ -1,143 +1,125 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT License.
-
 const path = require('path');
 const dotenv = require('dotenv');
-const TicketService = require('./services/TicketService');
-const {initiateConversation} = require('./controller');
-// Import required bot configuration.
-const ENV_FILE = path.join(__dirname, '.env');
-dotenv.config({ path: ENV_FILE });
-
 const restify = require('restify');
+const express = require('express');
+const bodyParser = require('body-parser');
 
-// Import required bot services.
-// See https://aka.ms/bot-services to learn more about the different parts of a bot.
+const TicketService = require('./services/TicketService');
+const { initiateConversation, sendTeamsReply, sendTicketReply } = require('./controller');
+const { messageQueue } = require('./queues/messageQueue');
+const { EchoBot } = require('./bot');
+
 const {
     CloudAdapter,
     ConfigurationBotFrameworkAuthentication
 } = require('botbuilder');
 
-// This bot's main dialog.
-const { EchoBot } = require('./bot');
+const { ExpressAdapter } = require('@bull-board/express');
+const { BullMQAdapter } = require('@bull-board/api/bullMQAdapter');
+const { createBullBoard } = require('@bull-board/api');
 
-// Create HTTP server
-const server = restify.createServer();
-server.use(restify.plugins.bodyParser());
+dotenv.config({ path: path.join(__dirname, '.env') });
 
-server.listen(process.env.port || process.env.PORT || 3978, () => {
-    console.log(`\n${ server.name } listening to ${ server.url }`);
-    console.log('\nGet Bot Framework Emulator: https://aka.ms/botframework-emulator');
-    console.log('\nTo talk to your bot, open the emulator select "Open Bot"');
+const botServer = restify.createServer();
+botServer.use(restify.plugins.bodyParser());
+
+botServer.listen(process.env.PORT || 3978, () => {
+    console.log(`🤖 Bot server listening on http://localhost:${process.env.PORT || 3978}`);
 });
 
 const botFrameworkAuthentication = new ConfigurationBotFrameworkAuthentication(process.env);
-
-// Create adapter.
-// See https://aka.ms/about-bot-adapter to learn more about how bots work.
 const adapter = new CloudAdapter(botFrameworkAuthentication);
+const myBot = new EchoBot();
 
-// Catch-all for errors.
-const onTurnErrorHandler = async (context, error) => {
-    // This check writes out errors to console log .vs. app insights.
-    // NOTE: In production environment, you should consider logging this to Azure
-    //       application insights. See https://aka.ms/bottelemetry for telemetry
-    //       configuration instructions.
-    console.error(`\n [onTurnError] unhandled error: ${ error }`);
-
-    // Send a trace activity, which will be displayed in Bot Framework Emulator
-    await context.sendTraceActivity(
-        'OnTurnError Trace',
-        `${ error }`,
-        'https://www.botframework.com/schemas/error',
-        'TurnError'
-    );
-
-    // Send a message to the user
-    await context.sendActivity('The bot encountered an error or bug.');
-    await context.sendActivity('To continue to run this bot, please fix the bot source code.');
+adapter.onTurnError = async (context, error) => {
+    console.error(`[onTurnError] unhandled error: ${error}`);
+    await context.sendTraceActivity('OnTurnError Trace', `${error}`, 'https://www.botframework.com/schemas/error', 'TurnError');
+    await context.sendActivity('The bot encountered an error.');
 };
 
-// Set the onTurnError for the singleton CloudAdapter.
-adapter.onTurnError = onTurnErrorHandler;
-
-// Create the main dialog.
-const myBot = new EchoBot();
-const { sendTeamsReply, sendTicketReply } = require('./controller');
-
-// Listen for incoming requests.
-server.post('/api/messages', async (req, res) => {
-    // Route received a request to adapter for processing
-    await adapter.process(req, res, (context) => myBot.run(context));
+botServer.post('/api/messages', async (req, res) => {
+    try {
+        await messageQueue.add('teams-incoming-message', {
+            body: req.body,
+            headers: req.headers
+        });
+        res.send(200, { success: true, message: 'Message enqueued' });
+    } catch (error) {
+        console.error('Error enqueuing message:', error.message);
+        res.send(500, { error: 'Failed to enqueue message', details: error.message });
+    }
 });
 
-server.post('/api/sendReply', async (req, res) => {
+botServer.post('/api/sendReply', async (req, res) => {
     const { ticketId, message, email } = req.body;
-    console.log("TicketId: ", ticketId);
-    console.log("Message: ", message);
-    console.log("Email: ", email);
     try {
         const ticket = await TicketService.findByTicketId(ticketId);
-        console.log("Ticket: "+ JSON.stringify(ticket));
         await sendTicketReply(ticket.requestChannelConversationId, ticketId, message, email);
-        console.log("techChannelConversationId: ", ticket.techChannelConversationId);
         await sendTicketReply(ticket.techChannelConversationId, ticketId, message, email);
-        res.send(200, { success: true, message: 'Reply sent successfully!' });
+        res.send(200, { success: true, message: 'Reply sent successfully' });
     } catch (error) {
-        console.error(' Error sending reply:', error.message);
+        console.error('Error sending reply:', error.message);
         res.send(500, { error: 'Failed to send reply.', details: error.message });
     }
 });
 
-server.post('/api/updateTicket', async (req, res) => {
+botServer.post('/api/updateTicket', async (req, res) => {
     const { ticketId, subject, email } = req.body;
     try {
-        console.log("Subject: ", subject);
         const ticket = await TicketService.findById(ticketId);
         ticket.body = subject || ticket.subject;
         const technician = await TicketService.findTechnicianByemail(email);
         ticket.technicianId = technician.id;
         await ticket.save();
-        await technician.save()
-        res.send(200, { success: true, message: 'Ticket updated successfully!' });
+        await technician.save();
+        res.send(200, { success: true, message: 'Ticket updated successfully' });
     } catch (error) {
-        console.error('❌ Error sending reply:', error.message);
-        res.send(500, { error: 'Failed to send reply.', details: error.message });
+        console.error('Error updating ticket:', error.message);
+        res.send(500, { error: 'Failed to update ticket.', details: error.message });
     }
 });
 
-server.post('/initiate-conversation' , async (req , res) => {
-    const {technicianEmail , requesterEmail , ticketId} = req.body;
-
-    try{
-        await initiateConversation(requesterEmail , technicianEmail , ticketId);
+botServer.post('/initiate-conversation', async (req, res) => {
+    const { technicianEmail, requesterEmail, ticketId } = req.body;
+    try {
+        await initiateConversation(requesterEmail, technicianEmail, ticketId);
         res.send(200, { success: true, message: 'Group chat created' });
-    }
-
-    catch{
+    } catch (error) {
+        console.error('Error initiating chat:', error.message);
         res.send(500, { error: 'Failed to create chat.', details: error.message });
     }
-    
-})
+});
 
-server.post('/webhook/reply', async (req, res) => {
+botServer.post('/webhook/reply', async (req, res) => {
+    const { ticketId, replyMessage, repliedBy } = req.body;
     try {
-        const { ticketId, replyMessage, repliedBy} = req.body;
-        await sendTicketReply(null, ticketId, replyMessage, repliedBy)
-        res.send(200, { success: true, message: 'Ticketreply sent successfully!' });
+        await sendTicketReply(null, ticketId, replyMessage, repliedBy);
+        res.send(200, { success: true, message: 'Ticket reply sent' });
+    } catch (error) {
+        console.error('Error sending webhook reply:', error.message);
+        res.send(500, { error: 'Failed to send ticket reply.', details: error.message });
     }
-    catch (error) {
-        console.error('❌ Error sending Ticketreply:', error.message);
-        res.send(500, { error: 'Failed to send Ticketreply.', details: error.message });
-    }
-  });  
+});
 
-// Listen for Upgrade requests for Streaming.
-server.on('upgrade', async (req, socket, head) => {
-    // Create an adapter scoped to this WebSocket connection to allow storing session data.
+botServer.on('upgrade', async (req, socket, head) => {
     const streamingAdapter = new CloudAdapter(botFrameworkAuthentication);
-    // Set onTurnError for the CloudAdapter created for each connection.
-    streamingAdapter.onTurnError = onTurnErrorHandler;
-
+    streamingAdapter.onTurnError = adapter.onTurnError;
     await streamingAdapter.process(req, socket, head, (context) => myBot.run(context));
+});
+
+const adminApp = express();
+const adminPort = 3001;
+
+const serverAdapter = new ExpressAdapter();
+serverAdapter.setBasePath('/admin/queues');
+
+createBullBoard({
+    queues: [new BullMQAdapter(messageQueue)],
+    serverAdapter,
+});
+
+adminApp.use('/admin/queues', serverAdapter.getRouter());
+
+adminApp.listen(adminPort, () => {
+    console.log(`📊 Bull Board running at http://localhost:${adminPort}/admin/queues`);
 });
