@@ -70,7 +70,7 @@ class EchoBot extends TeamsActivityHandler {
                         const message = await context.sendActivity(await buildRequesterTicketCard(ticketId));
 
                         // TODO: fetch agentchannelId from mappings
-                        const agentChannelId = '19:REo9NLSxP6Nc3qUn2n8aMivpSuI3y9vrTaEXnGhqldM1@thread.tacv2';
+                        const agentChannelId = '19:7SZRT2YdlqNHD3U5QoZPZxrESx8socV-7SQZH9YI4_41@thread.tacv2';
                         console.log("agentChannelId: " + agentChannelId);
                         const { conversationId, activityId } = await sendMessageToChannel(agentChannelId, ticketId);
                         // await TicketService.updateTechChannelConversationId(ticketResponse.id, techChannelConversationId)

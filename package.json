@@ -16,9 +16,11 @@
         "url": "https://github.com"
     },
     "dependencies": {
+        "@aws-sdk/client-sqs": "^3.806.0",
         "botbuilder": "~4.23.0",
         "dotenv": "^8.2.0",
         "mysql2": "^3.14.0",
+        "node-mocks-http": "^1.17.2",
         "restify": "~10.0.0",
         "sequelize": "^6.37.7"
     },

@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 const path = require('path');
+const { sendMessageToQueue } = require('./services/SqsService.js');
 const dotenv = require('dotenv');
 const TicketService = require('./services/TicketService');
 const {initiateConversation} = require('./controller');
@@ -67,8 +68,33 @@ const { sendTeamsReply, sendTicketReply } = require('./controller');
 
 // Listen for incoming requests.
 server.post('/api/messages', async (req, res) => {
-    // Route received a request to adapter for processing
-    await adapter.process(req, res, (context) => myBot.run(context));
+    try {
+        const activity = req.body; // You can access it directly from raw body
+        const activityType = activity?.type;
+        const activityName = activity?.name;
+
+        if (activityType === 'invoke' || activityName === 'task/fetch') {
+            console.log('Handling task/fetch directly');
+
+            await adapter.process(req, res, async (context) => {
+            await myBot.run(context);
+            });
+
+            return;
+        }
+        const messagePayload = {
+            body: req.body
+        };
+
+        await sendMessageToQueue(
+            process.env.AWS_SQS_INCOMING_QUEUE_URL,
+            JSON.stringify(messagePayload),
+            req.headers
+        );
+    } catch (err) {
+        console.error('Error enqueuing message:', err);
+        res.send(500, { error: 'Failed to enqueue message', details: err.message });
+    }
 });
 
 server.post('/api/sendReply', async (req, res) => {
